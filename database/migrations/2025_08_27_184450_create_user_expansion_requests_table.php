@@ -18,7 +18,7 @@ return new class extends Migration
             $table->string('name');
             $table->string('email');
             $table->string('company')->nullable();
-            $table->text('reason'); // Por que precisa de mais conversões
+            $table->text('justification'); // Por que precisa de mais conversões
             $table->integer('requested_limit')->default(50);
             $table->enum('status', ['pending', 'approved', 'rejected'])->default('pending');
             $table->text('admin_notes')->nullable();

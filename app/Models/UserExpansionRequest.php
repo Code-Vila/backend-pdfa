@@ -265,14 +265,14 @@ class UserExpansionRequest extends Model
         
         return static::where('created_at', '>=', $monthAgo)
                     ->selectRaw('
-                        DATE(created_at) as date,
+                        DATE(created_at) as report_date,
                         COUNT(*) as total_requests,
                         SUM(CASE WHEN status = "approved" THEN 1 ELSE 0 END) as approved,
                         SUM(CASE WHEN status = "rejected" THEN 1 ELSE 0 END) as rejected,
                         SUM(CASE WHEN status = "pending" THEN 1 ELSE 0 END) as pending
                     ')
-                    ->groupBy('date')
-                    ->orderBy('date')
+                    ->groupBy('report_date')
+                    ->orderBy('report_date')
                     ->get()
                     ->toArray();
     }
@@ -294,7 +294,7 @@ class UserExpansionRequest extends Model
     public function dailyUsage()
     {
         return $this->hasOne(DailyUsage::class, 'ip_address', 'ip_address')
-                    ->where('date', Carbon::today()->toDateString());
+                    ->where('usage_date', Carbon::today()->toDateString());
     }
 
     /**

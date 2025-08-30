@@ -7,7 +7,6 @@ use App\Services\PdfConversionService;
 use App\Http\Requests\PdfConversionRequest;
 use App\Http\Resources\PdfConversionResource;
 use App\Http\Resources\PdfConversionCollection;
-use App\Http\Resources\DailyUsageResource;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Exception;
@@ -67,7 +66,7 @@ class PdfConversionController extends Controller
                 'data' => [
                     'conversions' => $conversions,
                     'errors' => $errors,
-                    'usage_info' => new DailyUsageResource((object) $updatedUsage)
+                    'usage_info' => $updatedUsage
                 ]
             ], count($conversions) > 0 ? 200 : 422);
 
@@ -139,13 +138,31 @@ class PdfConversionController extends Controller
             $ipAddress = $request->ip();
             $page = $request->get('page', 1);
             $perPage = min($request->get('per_page', 15), 50);
+            
+            // Filtros disponíveis
+            $filters = [
+                'status' => $request->get('status'), // processing, completed, failed
+                'date_from' => $request->get('date_from'), // formato: Y-m-d
+                'date_to' => $request->get('date_to'), // formato: Y-m-d
+                'filename' => $request->get('filename'), // busca por nome do arquivo
+                'order_by' => $request->get('order_by', 'created_at'), // created_at, original_filename, status
+                'order_direction' => $request->get('order_direction', 'desc'), // asc, desc
+            ];
 
-            $historyData = $this->conversionService->getConversionHistory($ipAddress, $page, $perPage);
+            $historyData = $this->conversionService->getConversionHistory($ipAddress, $page, $perPage, $filters);
 
             return response()->json([
                 'success' => true,
                 'data' => new PdfConversionCollection(collect($historyData['conversions'])),
-                'pagination' => $historyData['pagination']
+                'pagination' => $historyData['pagination'],
+                'filters' => [
+                    'applied' => array_filter($filters), // Apenas filtros aplicados
+                    'available' => [
+                        'status' => ['processing', 'completed', 'failed'],
+                        'order_by' => ['created_at', 'original_filename', 'status'],
+                        'order_direction' => ['asc', 'desc']
+                    ]
+                ]
             ]);
 
         } catch (Exception $e) {
@@ -168,10 +185,7 @@ class PdfConversionController extends Controller
 
             return response()->json([
                 'success' => true,
-                'data' => [
-                    'daily_usage' => new DailyUsageResource((object) $statsData['daily_usage']),
-                    'total_stats' => $statsData['total_stats']
-                ]
+                'data' => $statsData
             ]);
 
         } catch (Exception $e) {

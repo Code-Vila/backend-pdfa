@@ -13,11 +13,13 @@ class PdfConversionService
 {
     protected string $storagePath;
     protected int $maxFileSize;
+    protected PdfAConverter $pdfAConverter;
 
-    public function __construct()
+    public function __construct(PdfAConverter $pdfAConverter)
     {
         $this->storagePath = config('pdfa.storage_path', 'pdfa');
         $this->maxFileSize = config('pdfa.max_file_size', 10240); // KB
+        $this->pdfAConverter = $pdfAConverter;
     }
 
     /**
@@ -137,7 +139,7 @@ class PdfConversionService
     }
 
     /**
-     * Executa a conversão PDF/A usando Ghostscript
+     * Executa a conversão PDF/A usando FPDI + TCPDF
      */
     protected function executeConversion(string $originalPath, int $conversionId): string
     {
@@ -149,49 +151,41 @@ class PdfConversionService
         // Criar diretório se não existir
         Storage::makeDirectory(dirname($outputPath));
 
-        // Comando Ghostscript para conversão PDF/A
-        $command = sprintf(
-            'gs -dPDFA=1 -dBATCH -dNOPAUSE -sColorConversionStrategy=RGB ' .
-            '-sDEVICE=pdfwrite -dPDFACompatibilityPolicy=1 ' .
-            '-sOutputFile=%s %s 2>&1',
-            escapeshellarg($fullOutputPath),
-            escapeshellarg($inputPath)
-        );
+        // Usar FPDI + TCPDF para conversão
+        $success = $this->pdfAConverter->convertToPdfA($inputPath, $fullOutputPath);
 
-        $output = [];
-        $returnCode = 0;
-        exec($command, $output, $returnCode);
-
-        if ($returnCode !== 0 || !file_exists($fullOutputPath)) {
-            throw new Exception('Falha na conversão PDF/A: ' . implode("\n", $output));
+        if (!$success || !file_exists($fullOutputPath)) {
+            throw new Exception('Falha na conversão PDF/A usando FPDI + TCPDF');
         }
 
         return $outputPath;
     }
 
     /**
-     * Extrai metadados do PDF
+     * Extrai metadados do PDF usando FPDI
      */
     protected function extractPdfMetadata(string $pdfPath): array
     {
         try {
             $fullPath = Storage::path($pdfPath);
-            $command = sprintf('pdfinfo %s 2>&1', escapeshellarg($fullPath));
+            $info = $this->pdfAConverter->getPdfInfo($fullPath);
             
-            $output = [];
-            exec($command, $output);
-
-            $metadata = [];
-            foreach ($output as $line) {
-                if (strpos($line, ':') !== false) {
-                    [$key, $value] = explode(':', $line, 2);
-                    $metadata[trim($key)] = trim($value);
-                }
-            }
-
-            return $metadata;
+            return [
+                'pages' => $info['pages'] ?? 0,
+                'file_size' => $info['file_size'] ?? 0,
+                'width' => $info['page_width'] ?? 0,
+                'height' => $info['page_height'] ?? 0,
+                'is_valid' => $info['is_valid'] ?? false
+            ];
         } catch (Exception $e) {
-            return ['error' => 'Não foi possível extrair metadados'];
+            return [
+                'pages' => 0,
+                'file_size' => 0,
+                'width' => 0,
+                'height' => 0,
+                'is_valid' => false,
+                'error' => $e->getMessage()
+            ];
         }
     }
 
@@ -487,13 +481,47 @@ class PdfConversionService
     }
 
     /**
-     * Obter histórico de conversões
+     * Obter histórico de conversões com filtros
      */
-    public function getConversionHistory(string $ipAddress, int $page, int $perPage): array
+    public function getConversionHistory(string $ipAddress, int $page, int $perPage, array $filters = []): array
     {
-        $conversions = PdfConversion::byIpAddress($ipAddress)
-            ->orderBy('created_at', 'desc')
-            ->paginate($perPage, ['*'], 'page', $page);
+        $query = PdfConversion::byIpAddress($ipAddress);
+
+        // Aplicar filtros
+        if (!empty($filters['status'])) {
+            $query->where('status', $filters['status']);
+        }
+
+        if (!empty($filters['date_from'])) {
+            $query->whereDate('created_at', '>=', $filters['date_from']);
+        }
+
+        if (!empty($filters['date_to'])) {
+            $query->whereDate('created_at', '<=', $filters['date_to']);
+        }
+
+        if (!empty($filters['filename'])) {
+            $query->where('original_filename', 'ILIKE', '%' . $filters['filename'] . '%');
+        }
+
+        // Ordenação
+        $orderBy = $filters['order_by'] ?? 'created_at';
+        $orderDirection = $filters['order_direction'] ?? 'desc';
+        
+        // Validar campos de ordenação
+        $allowedOrderBy = ['created_at', 'original_filename', 'status', 'processing_time'];
+        if (!in_array($orderBy, $allowedOrderBy)) {
+            $orderBy = 'created_at';
+        }
+
+        if (!in_array($orderDirection, ['asc', 'desc'])) {
+            $orderDirection = 'desc';
+        }
+
+        $query->orderBy($orderBy, $orderDirection);
+
+        // Paginação
+        $conversions = $query->paginate($perPage, ['*'], 'page', $page);
 
         return [
             'conversions' => $conversions->items(),
@@ -501,7 +529,10 @@ class PdfConversionService
                 'current_page' => $conversions->currentPage(),
                 'last_page' => $conversions->lastPage(),
                 'per_page' => $conversions->perPage(),
-                'total' => $conversions->total()
+                'total' => $conversions->total(),
+                'from' => $conversions->firstItem(),
+                'to' => $conversions->lastItem(),
+                'has_more_pages' => $conversions->hasMorePages()
             ]
         ];
     }
@@ -516,16 +547,12 @@ class PdfConversionService
         $todayConversions = PdfConversion::byIpAddress($ipAddress)->completed()->today()->count();
 
         return [
-            'daily_usage' => [
-                'conversions_used_today' => $usage->conversions_count,
-                'daily_limit' => $usage->daily_limit,
-                'remaining_conversions' => $usage->getRemainingConversions(),
-                'is_expanded' => $usage->is_expanded
-            ],
-            'total_stats' => [
-                'total_conversions' => $totalConversions,
-                'today_conversions' => $todayConversions
-            ]
+            'daily_limit' => $usage->daily_limit,
+            'today_conversions' => $usage->conversions_count,
+            'remaining_conversions' => $usage->getRemainingConversions(),
+            'total_conversions' => $totalConversions,
+            'is_expanded' => $usage->is_expanded,
+            'usage_percentage' => round(($usage->conversions_count / $usage->daily_limit) * 100, 2),
         ];
     }
 }

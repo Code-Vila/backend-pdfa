@@ -12,8 +12,10 @@
         "laravel/framework": "^12.0",
         "laravel/sanctum": "^4.2",
         "laravel/tinker": "^2.10.1",
+        "setasign/fpdi": "^2.6",
         "spatie/laravel-backup": "^9.3",
-        "spatie/pdf-to-image": "^1.2"
+        "spatie/pdf-to-image": "^1.2",
+        "tecnickcom/tcpdf": "^6.10"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

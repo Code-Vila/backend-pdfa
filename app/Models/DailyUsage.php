@@ -11,9 +11,11 @@ class DailyUsage extends Model
 {
     use HasFactory;
 
+    protected $table = 'daily_usage';
+
     protected $fillable = [
         'ip_address',
-        'date',
+        'usage_date',
         'conversions_count',
         'daily_limit',
         'is_expanded',
@@ -22,7 +24,7 @@ class DailyUsage extends Model
     ];
 
     protected $casts = [
-        'date' => 'date',
+        'usage_date' => 'date',
         'conversions_count' => 'integer',
         'daily_limit' => 'integer',
         'is_expanded' => 'boolean',
@@ -45,7 +47,7 @@ class DailyUsage extends Model
      */
     public function scopeForDate(Builder $query, Carbon $date): Builder
     {
-        return $query->where('date', $date->toDateString());
+        return $query->where('usage_date', $date->toDateString());
     }
 
     /**
@@ -53,7 +55,7 @@ class DailyUsage extends Model
      */
     public function scopeToday(Builder $query): Builder
     {
-        return $query->where('date', Carbon::today()->toDateString());
+        return $query->where('usage_date', Carbon::today()->toDateString());
     }
 
     /**
@@ -72,17 +74,23 @@ class DailyUsage extends Model
     {
         $today = Carbon::today();
         
-        return static::firstOrCreate(
-            [
-                'ip_address' => $ipAddress,
-                'date' => $today->toDateString(),
-            ],
-            [
-                'conversions_count' => 0,
-                'daily_limit' => config('pdfa.default_daily_limit', 10),
-                'is_expanded' => false,
-            ]
-        );
+        // Debug: verificar se existe registro
+        $existing = static::where('ip_address', $ipAddress)
+                         ->where('usage_date', $today->toDateString())
+                         ->first();
+        
+        if ($existing) {
+            return $existing;
+        }
+        
+        // Se não existe, criar novo
+        return static::create([
+            'ip_address' => $ipAddress,
+            'usage_date' => $today->toDateString(),
+            'conversions_count' => 0,
+            'daily_limit' => config('pdfa.default_daily_limit', 10),
+            'is_expanded' => false,
+        ]);
     }
 
     /**
@@ -208,11 +216,11 @@ class DailyUsage extends Model
         $today = Carbon::today()->toDateString();
         
         return [
-            'total_users' => static::where('date', $today)->count(),
-            'active_users' => static::where('date', $today)->where('conversions_count', '>', 0)->count(),
-            'total_conversions' => static::where('date', $today)->sum('conversions_count'),
-            'users_at_limit' => static::where('date', $today)->whereRaw('conversions_count >= daily_limit')->count(),
-            'expanded_users' => static::where('date', $today)->where('is_expanded', true)->count(),
+            'total_users' => static::where('usage_date', $today)->count(),
+            'active_users' => static::where('usage_date', $today)->where('conversions_count', '>', 0)->count(),
+            'total_conversions' => static::where('usage_date', $today)->sum('conversions_count'),
+            'users_at_limit' => static::where('usage_date', $today)->whereRaw('conversions_count >= daily_limit')->count(),
+            'expanded_users' => static::where('usage_date', $today)->where('is_expanded', true)->count(),
         ];
     }
 
@@ -223,16 +231,16 @@ class DailyUsage extends Model
     {
         $weekAgo = Carbon::now()->subWeek();
         
-        return static::where('date', '>=', $weekAgo->toDateString())
+        return static::where('usage_date', '>=', $weekAgo->toDateString())
                     ->selectRaw('
-                        date,
+                        usage_date,
                         COUNT(*) as users_count,
                         SUM(conversions_count) as total_conversions,
                         SUM(CASE WHEN conversions_count >= daily_limit THEN 1 ELSE 0 END) as users_at_limit,
                         SUM(CASE WHEN is_expanded THEN 1 ELSE 0 END) as expanded_users
                     ')
-                    ->groupBy('date')
-                    ->orderBy('date')
+                    ->groupBy('usage_date')
+                    ->orderBy('usage_date')
                     ->get()
                     ->toArray();
     }
@@ -243,7 +251,7 @@ class DailyUsage extends Model
     public function conversions()
     {
         return $this->hasMany(PdfConversion::class, 'ip_address', 'ip_address')
-                    ->whereDate('created_at', $this->date);
+                    ->whereDate('created_at', $this->usage_date);
     }
 
     /**
